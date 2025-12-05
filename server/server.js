@@ -28,7 +28,7 @@ mongoose.set('strictQuery', false);
 app.use(
   cors({
     //origin: "http://localhost:5173",
-    [
+    origin:[
       "http://localhost:5173",
       "https://new-proj0-1.onrender.com",
       "https://new-proj0.onrender.com"
