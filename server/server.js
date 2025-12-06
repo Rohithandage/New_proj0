@@ -30,7 +30,7 @@ app.use(
     //origin: "http://localhost:5173",
     origin:[
       "http://localhost:5173",
-      "https://clothnest1.onrender.com",
+      "https://clothnest1.netlify.app",
       "https://clothnest-5rko.onrender.com"
     ],
     methods: ["GET", "POST", "DELETE", "PUT", "PATCH"],
