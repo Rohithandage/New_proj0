@@ -10,7 +10,11 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+
+  publicDir: "public",           // 👈 Ensure public files are included
+  
   build: {
+    copyPublicDir: true, 
     // Performance optimizations
     rollupOptions: {
       output: {
