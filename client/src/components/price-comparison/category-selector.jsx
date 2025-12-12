@@ -4,6 +4,7 @@ import { ChevronDown, ChevronRight, Shirt, Heart, Baby } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useImagePreloader } from "@/hooks/use-image-preloader";
 
 const CategorySelector = () => {
   const navigate = useNavigate();
@@ -111,13 +112,28 @@ const CategorySelector = () => {
     }
   };
 
-  const handleSubcategoryClick = (categoryId, subcategoryId) => {
-    setActiveSubcategory(subcategoryId);
-    navigate(`/search?category=${categoryId}&subcategory=${subcategoryId}`);
-  };
 
   const handleCategoryBrowse = (categoryId) => {
+    // Prefetch category page for instant loading
+    const link = document.createElement('link');
+    link.rel = 'prefetch';
+    link.href = `/search?category=${categoryId}`;
+    link.as = 'document';
+    document.head.appendChild(link);
+    
     navigate(`/search?category=${categoryId}`);
+  };
+  
+  const handleSubcategoryClick = (categoryId, subcategoryId) => {
+    // Prefetch subcategory page for instant loading
+    const link = document.createElement('link');
+    link.rel = 'prefetch';
+    link.href = `/search?category=${categoryId}&subcategory=${subcategoryId}`;
+    link.as = 'document';
+    document.head.appendChild(link);
+    
+    setActiveSubcategory(subcategoryId);
+    navigate(`/search?category=${categoryId}&subcategory=${subcategoryId}`);
   };
 
   return (

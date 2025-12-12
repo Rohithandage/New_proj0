@@ -6,6 +6,7 @@ import SEO from "@/components/seo/SEO";
 import { generateProductSchema, generateBreadcrumbSchema } from "@/utils/schema";
 import axios from "axios";
 import apiConfig from "@/config/api";
+import { getCachedRequest } from "@/lib/api-cache";
 
 const ProductDetails = () => {
   const { productId } = useParams();
@@ -19,10 +20,14 @@ const ProductDetails = () => {
   const fetchProduct = async () => {
     setLoading(true);
     try {
-      const response = await axios.get(
-        `${apiConfig.PRICE_COMPARISON}/product/${productId}`
-      );
-      setProduct(response.data.data);
+      const url = `${apiConfig.PRICE_COMPARISON}/product/${productId}`;
+      
+      const productData = await getCachedRequest(url, {}, async () => {
+        const response = await axios.get(url);
+        return response.data.data;
+      });
+      
+      setProduct(productData);
     } catch (error) {
       console.error("Error fetching product:", error);
     } finally {

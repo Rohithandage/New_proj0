@@ -6,13 +6,15 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import ProductCard from "@/components/price-comparison/product-card";
+import ViewportProductCard from "@/components/price-comparison/viewport-product-card";
 import SubcategoryFilter from "@/components/price-comparison/subcategory-filter";
 import SEO from "@/components/seo/SEO";
 import { generateCollectionPageSchema } from "@/utils/schema";
 import axios from "axios";
 import apiConfig from "@/config/api";
 import { useToast } from "@/components/ui/use-toast";
+import { getCachedResponse, setCachedResponse, getCachedRequest } from "@/lib/api-cache";
+import { preloadProductImages, preloadImagesInHead } from "@/lib/image-preloader";
 
 const Search = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -112,8 +114,32 @@ const Search = () => {
       setShowFilters(false); // Hide category filters when showing trending
     }
     
+    // AGGRESSIVE: For category pages, start fetching immediately (don't wait)
     // Fetch products when params change
     fetchProducts();
+    
+    // Prefetch API response for category pages
+    if (urlCategory || urlSubcategory) {
+      const url = `${apiConfig.PRICE_COMPARISON}/search`;
+      const params = {};
+      if (urlCategory) params.category = urlCategory;
+      if (urlSubcategory) params.subcategory = urlSubcategory;
+      params.limit = '1000';
+      
+      // Start prefetching in background
+      fetch(`${url}?${new URLSearchParams(params).toString()}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.success && data.data) {
+            // Preload images from prefetched data
+            const prefetchedProducts = data.data.slice(0, 12);
+            preloadProductImages(prefetchedProducts, 'high', 10);
+          }
+        })
+        .catch(() => {
+          // Silently fail - main fetch will handle it
+        });
+    }
   }, [searchParams]);
 
   // Check authentication status
@@ -202,13 +228,18 @@ const Search = () => {
 
   const fetchTrendingProducts = async () => {
     try {
-      // Fetch only trending products
-      const response = await axios.get(
-        `${apiConfig.PRICE_COMPARISON}/search?trending=true&limit=8`
-      );
-      setTrendingProducts(response.data.data || []);
+      const url = `${apiConfig.PRICE_COMPARISON}/search`;
+      const params = { trending: 'true', limit: 8 };
+      
+      const products = await getCachedRequest(url, params, async () => {
+        const response = await axios.get(`${url}?trending=true&limit=8`);
+        return response.data.data || [];
+      });
+      
+      setTrendingProducts(products);
     } catch (error) {
       console.error("Error fetching trending products:", error);
+      setTrendingProducts([]);
     } finally {
       setTrendingLoading(false);
     }
@@ -227,55 +258,77 @@ const Search = () => {
       const urlWebsite = searchParams.get('website') || '';
       const urlTrending = searchParams.get('trending') || '';
       
-      const params = new URLSearchParams();
-      if (urlQuery) params.append('query', urlQuery);
-      if (urlCategory) params.append('category', urlCategory);
-      if (urlSubcategory) params.append('subcategory', urlSubcategory);
-      if (urlSortBy) params.append('sortBy', urlSortBy);
-      if (urlMinPrice) params.append('minPrice', urlMinPrice);
-      if (urlMaxPrice) params.append('maxPrice', urlMaxPrice);
-      if (urlWebsite) params.append('website', urlWebsite);
-      if (urlTrending === 'true') params.append('trending', 'true');
-      // Increase limit to show all products from all brands
-      params.append('limit', '1000');
-
-      const response = await axios.get(`${apiConfig.PRICE_COMPARISON}/search?${params.toString()}`);
+      const url = `${apiConfig.PRICE_COMPARISON}/search`;
+      const params = {};
+      if (urlQuery) params.query = urlQuery;
+      if (urlCategory) params.category = urlCategory;
+      if (urlSubcategory) params.subcategory = urlSubcategory;
+      if (urlSortBy) params.sortBy = urlSortBy;
+      if (urlMinPrice) params.minPrice = urlMinPrice;
+      if (urlMaxPrice) params.maxPrice = urlMaxPrice;
+      if (urlWebsite) params.website = urlWebsite;
+      if (urlTrending === 'true') params.trending = 'true';
+      params.limit = '1000';
       
-      if (response.data.success) {
-        const fetchedProducts = response.data.data || [];
-        console.log('Response from backend:', response.data);
-        console.log('Fetched products:', fetchedProducts);
-        console.log(`Fetched ${fetchedProducts.length} products for category: ${urlCategory}, subcategory: ${urlSubcategory}`);
+      const products = await getCachedRequest(url, params, async () => {
+        // Build URL params for API call
+        const urlParams = new URLSearchParams();
+        Object.entries(params).forEach(([key, value]) => {
+          urlParams.append(key, value);
+        });
         
-        // Log each product's structure
-        if (fetchedProducts.length > 0) {
-          fetchedProducts.forEach((product, index) => {
-            console.log(`Product ${index + 1}:`, {
-              id: product._id,
-              name: product.name,
-              category: product.category,
-              subcategory: product.subcategory,
-              brand: product.brand,
-              image: product.image,
-              pricesCount: product.prices?.length || 0,
-              prices: product.prices
-            });
-          });
+        const response = await axios.get(`${url}?${urlParams.toString()}`);
+        return response.data.success ? (response.data.data || []) : [];
+      });
+      
+      setProducts(products);
+      
+      // AGGRESSIVE: Preload images immediately when products are fetched (especially for category pages)
+      if (products && products.length > 0) {
+        // For category pages, preload more aggressively (first 12 instead of 8)
+        const isCategoryPage = urlCategory || urlSubcategory;
+        const visibleCount = isCategoryPage ? 12 : 8;
+        const headPreloadCount = isCategoryPage ? 8 : 6;
+        
+        const visibleProducts = products.slice(0, visibleCount);
+        const criticalImages = [];
+        visibleProducts.forEach(product => {
+          if (product.images && product.images.length > 0) {
+            criticalImages.push(product.images[0]);
+            // For category pages, also preload second image
+            if (isCategoryPage && product.images.length > 1) {
+              criticalImages.push(product.images[1]);
+            }
+          } else if (product.image) {
+            criticalImages.push(product.image);
+          }
+        });
+        
+        // Preload critical images in HTML head (more for category pages)
+        if (criticalImages.length > 0) {
+          preloadImagesInHead(criticalImages.slice(0, headPreloadCount));
         }
         
-        setProducts(fetchedProducts);
+        // Preload all visible product images with high priority
+        preloadProductImages(visibleProducts, 'high', isCategoryPage ? 10 : 8);
         
-        // Show toast if no products found but filters are applied
-        if (fetchedProducts.length === 0 && (urlCategory || urlSubcategory)) {
-          console.warn('No products found with current filters');
+        // Preload remaining in background (more aggressively for category pages)
+        if (products.length > visibleCount) {
+          const remainingProducts = products.slice(visibleCount);
+          // For category pages, preload next batch with medium priority
+          if (isCategoryPage && remainingProducts.length > 0) {
+            const nextBatch = remainingProducts.slice(0, 12);
+            preloadProductImages(nextBatch, 'high', 8);
+            if (remainingProducts.length > 12) {
+              preloadProductImages(remainingProducts.slice(12), 'low', 6);
+            }
+          } else {
+            preloadProductImages(remainingProducts, 'low', 6);
+          }
         }
-      } else {
-        console.error('Search response unsuccessful:', response.data);
-        setProducts([]);
       }
     } catch (error) {
       console.error("Error fetching products:", error);
-      console.error("Error details:", error.response?.data || error.message);
       setProducts([]);
     } finally {
       setLoading(false);
@@ -1298,7 +1351,7 @@ const Search = () => {
                     {showAlert && isSelected && (bothSelected || onlyCategorySelected || showFilters || isTrendingView || products.length > 0) && (
                       <div className="absolute inset-0 border-4 border-amber-500 rounded-xl pointer-events-none z-0 bg-amber-500/10" />
                     )}
-                    <ProductCard product={product} />
+                    <ViewportProductCard product={product} />
                   </div>
                 );
               })}

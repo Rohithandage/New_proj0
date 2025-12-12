@@ -36,10 +36,91 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     
+    <!-- DNS Prefetch for image domains (add your image CDN domains here) -->
+    <link rel="dns-prefetch" href="https://res.cloudinary.com" />
+    <link rel="dns-prefetch" href="https://images.unsplash.com" />
+    
+    <!-- Preload critical resources -->
+    <link rel="preload" as="script" href="/src/main.jsx" />
+    
+    <!-- Prefetch first product API call for instant loading -->
+    <link rel="prefetch" as="fetch" href="/api/price-comparison/search?trending=true&limit=1" crossorigin />
+    
     <title>PriceCompare - Search All Brands of Clothing | Men, Women & Kids Clothes | Compare Prices</title>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    <!-- Aggressive Image Preloader - Starts immediately before React loads -->
+    <script>
+      (function() {
+        // Create image cache in browser memory immediately
+        window.__imageCache = new Set();
+        window.__preloadImage = function(src) {
+          if (!src || window.__imageCache.has(src)) return;
+          window.__imageCache.add(src);
+          var img = new Image();
+          img.src = src;
+        };
+        
+        // Preload function for multiple images
+        window.__preloadImages = function(urls) {
+          if (!urls || !Array.isArray(urls)) return;
+          urls.forEach(function(url) {
+            if (url) window.__preloadImage(url);
+          });
+        };
+        
+        // AGGRESSIVE: Fetch first product immediately before React loads
+        window.__fetchFirstProduct = function() {
+          // Use environment variable or default API URL
+          var apiBaseUrl = 'https://clothnest-5rko.onrender.com';
+          if (window.__API_BASE_URL) {
+            apiBaseUrl = window.__API_BASE_URL;
+          }
+          var apiUrl = apiBaseUrl + '/api/price-comparison/search?trending=true&limit=1';
+          fetch(apiUrl, { mode: 'cors' })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+              if (data.success && data.data && data.data.length > 0) {
+                var firstProduct = data.data[0];
+                window.__firstProduct = firstProduct;
+                
+                // Preload first product image immediately
+                if (firstProduct.images && firstProduct.images.length > 0) {
+                  window.__preloadImage(firstProduct.images[0]);
+                  // Also add to head for maximum priority
+                  var link = document.createElement('link');
+                  link.rel = 'preload';
+                  link.as = 'image';
+                  link.href = firstProduct.images[0];
+                  link.fetchPriority = 'high';
+                  document.head.appendChild(link);
+                } else if (firstProduct.image) {
+                  window.__preloadImage(firstProduct.image);
+                  var link = document.createElement('link');
+                  link.rel = 'preload';
+                  link.as = 'image';
+                  link.href = firstProduct.image;
+                  link.fetchPriority = 'high';
+                  document.head.appendChild(link);
+                }
+              }
+            })
+            .catch(function() {
+              // Silently fail - React will handle it
+            });
+        };
+        
+        // Start fetching first product immediately
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', function() {
+            window.__fetchFirstProduct();
+          });
+        } else {
+          window.__fetchFirstProduct();
+        }
+      })();
+    </script>
   </body>
 </html>

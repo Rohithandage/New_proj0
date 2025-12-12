@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import axios from "axios";
 import apiConfig from "@/config/api";
+import { preloadProductImages, preloadImagesInHead } from "@/lib/image-preloader";
+import { getCachedRequest } from "@/lib/api-cache";
 
 const ProductRecommendations = ({ productId, product, category, subcategory }) => {
   const [recommendations, setRecommendations] = useState([]);
@@ -18,11 +20,12 @@ const ProductRecommendations = ({ productId, product, category, subcategory }) =
   const fetchRecommendations = async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams();
+      const url = `${apiConfig.PRICE_COMPARISON}/search`;
+      const params = {};
       
       // Filter by subcategory (same subcategory)
       if (subcategory) {
-        params.append('subcategory', subcategory);
+        params.subcategory = subcategory;
       }
       
       // Filter by similar price range
@@ -39,47 +42,78 @@ const ProductRecommendations = ({ productId, product, category, subcategory }) =
         const minPrice = Math.max(0, Math.floor(avgPrice * 0.7));
         const maxPrice = Math.ceil(avgPrice * 1.3);
         
-        params.append('minPrice', minPrice.toString());
-        params.append('maxPrice', maxPrice.toString());
+        params.minPrice = minPrice.toString();
+        params.maxPrice = maxPrice.toString();
       }
       
-      params.append('limit', '20'); // Get more to filter better
-      params.append('exclude', productId);
+      params.limit = '20'; // Get more to filter better
+      params.exclude = productId;
 
-      const response = await axios.get(`${apiConfig.PRICE_COMPARISON}/search?${params.toString()}`);
-      
-      // Filter and limit to 4 best matches
-      let filteredProducts = response.data.data || [];
-      
-      // Sort by price similarity (products with prices closest to the original)
-      if (product && product.prices && product.prices.length > 0) {
-        const productPrices = product.prices.map(p => p.price);
-        const avgProductPrice = (Math.min(...productPrices) + Math.max(...productPrices)) / 2;
+      const recommendations = await getCachedRequest(url, params, async () => {
+        const urlParams = new URLSearchParams();
+        Object.entries(params).forEach(([key, value]) => {
+          urlParams.append(key, value);
+        });
         
-        filteredProducts = filteredProducts
-          .map(p => {
-            if (!p.prices || p.prices.length === 0) return null;
-            const pPrices = p.prices.map(pr => pr.price);
-            const avgPPrice = (Math.min(...pPrices) + Math.max(...pPrices)) / 2;
-            const priceDiff = Math.abs(avgPPrice - avgProductPrice);
-            return { ...p, priceDiff };
-          })
-          .filter(p => p !== null)
-          .sort((a, b) => a.priceDiff - b.priceDiff)
+        const response = await axios.get(`${url}?${urlParams.toString()}`);
+        
+        // Filter and limit to 4 best matches
+        let filteredProducts = response.data.data || [];
+        
+        // Sort by price similarity (products with prices closest to the original)
+        if (product && product.prices && product.prices.length > 0) {
+          const productPrices = product.prices.map(p => p.price);
+          const avgProductPrice = (Math.min(...productPrices) + Math.max(...productPrices)) / 2;
+          
+          filteredProducts = filteredProducts
+            .map(p => {
+              if (!p.prices || p.prices.length === 0) return null;
+              const pPrices = p.prices.map(pr => pr.price);
+              const avgPPrice = (Math.min(...pPrices) + Math.max(...pPrices)) / 2;
+              const priceDiff = Math.abs(avgPPrice - avgProductPrice);
+              return { ...p, priceDiff };
+            })
+            .filter(p => p !== null)
+            .sort((a, b) => a.priceDiff - b.priceDiff)
           .slice(0, 4)
           .map(({ priceDiff, ...p }) => p);
       } else {
         filteredProducts = filteredProducts.slice(0, 4);
       }
       
-      setRecommendations(filteredProducts);
-    } catch (error) {
-      console.error("Error fetching recommendations:", error);
-      setRecommendations([]);
-    } finally {
-      setLoading(false);
+      return filteredProducts;
+    });
+    
+    // Limit to 8 recommendations
+    const limitedRecommendations = recommendations.slice(0, 8);
+    setRecommendations(limitedRecommendations);
+    
+    // AGGRESSIVE: Preload recommendation images immediately
+    if (limitedRecommendations.length > 0) {
+      // Preload first 4 recommendation images in head
+      const criticalImages = [];
+      limitedRecommendations.slice(0, 4).forEach(rec => {
+        if (rec.images && rec.images.length > 0) {
+          criticalImages.push(rec.images[0]);
+        } else if (rec.image) {
+          criticalImages.push(rec.image);
+        }
+      });
+      
+      if (criticalImages.length > 0) {
+        preloadImagesInHead(criticalImages);
+      }
+      
+      // Preload all recommendation images
+      preloadProductImages(limitedRecommendations, 'high', 6);
     }
-  };
+  } catch (error) {
+    console.error("Error fetching recommendations:", error);
+    setRecommendations([]);
+  } finally {
+    setLoading(false);
+  }
+};
 
   if (loading) {
     return (

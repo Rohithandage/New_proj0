@@ -4,20 +4,37 @@ import { Search as SearchIcon, TrendingUp, Shield, Zap, Bell, ShoppingBag, BarCh
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
-import ProductCard from "@/components/price-comparison/product-card";
+import ViewportProductCard from "@/components/price-comparison/viewport-product-card";
 import SEO from "@/components/seo/SEO";
 import { generateWebsiteSchema, generateOrganizationSchema } from "@/utils/schema";
 import axios from "axios";
 import apiConfig from "@/config/api";
+import { getCachedResponse, setCachedResponse, getCachedRequest } from "@/lib/api-cache";
+import { preloadProductImages, preloadImagesInHead } from "@/lib/image-preloader";
+import { useImagePreloader } from "@/hooks/use-image-preloader";
 
 const Home = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [featuredProducts, setFeaturedProducts] = useState([]);
-  const [trendingProducts, setTrendingProducts] = useState([]);
+  // INSTANT: Initialize with first product from inline script if available
+  const [trendingProducts, setTrendingProducts] = useState(() => {
+    // Check if first product was preloaded by inline script
+    if (typeof window !== 'undefined' && window.__firstProduct) {
+      return [window.__firstProduct];
+    }
+    return [];
+  });
   const [featuredLoading, setFeaturedLoading] = useState(true);
-  const [trendingLoading, setTrendingLoading] = useState(true);
+  // INSTANT: First product already loaded, so don't show loading
+  const [trendingLoading, setTrendingLoading] = useState(() => {
+    return !(typeof window !== 'undefined' && window.__firstProduct);
+  });
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const navigate = useNavigate();
+  
+  // AGGRESSIVE: Preload images as soon as products are available
+  useImagePreloader(trendingProducts, { priority: 'high', maxHeadPreload: 4 });
+  useImagePreloader(featuredProducts, { priority: 'high', maxHeadPreload: 4 });
 
   const checkAuthStatus = useCallback(() => {
     const userData = localStorage.getItem('user');
@@ -27,13 +44,39 @@ const Home = () => {
 
   const fetchFeaturedProducts = useCallback(async () => {
     try {
-      const response = await axios.get(
-        `${apiConfig.PRICE_COMPARISON}/search?limit=8`
-       // `${apiConfig.PRICE_COMPARISON}/products?limit=8`
-      );
-      setFeaturedProducts(response.data.data || []);
+      const url = `${apiConfig.PRICE_COMPARISON}/search`;
+      const params = { limit: 8 };
+      
+      const products = await getCachedRequest(url, params, async () => {
+        const response = await axios.get(`${url}?limit=8`);
+        return response.data.data || [];
+      });
+      
+      setFeaturedProducts(products);
+      
+      // AGGRESSIVE: Preload images immediately when products are fetched
+      if (products && products.length > 0) {
+        // Extract first 4 product images for immediate preload in head
+        const criticalImages = [];
+        products.slice(0, 4).forEach(product => {
+          if (product.images && product.images.length > 0) {
+            criticalImages.push(product.images[0]);
+          } else if (product.image) {
+            criticalImages.push(product.image);
+          }
+        });
+        
+        // Preload critical images in HTML head for instant display
+        if (criticalImages.length > 0) {
+          preloadImagesInHead(criticalImages);
+        }
+        
+        // Preload all product images in background
+        preloadProductImages(products, 'high');
+      }
     } catch (error) {
       console.error("Error fetching featured products:", error);
+      setFeaturedProducts([]);
     } finally {
       setFeaturedLoading(false);
     }
@@ -41,27 +84,77 @@ const Home = () => {
 
   const fetchTrendingProducts = useCallback(async () => {
     try {
-      // Fetch only trending products
-      const response = await axios.get(
-        `${apiConfig.PRICE_COMPARISON}/search?trending=true&limit=8`
-      );
-      setTrendingProducts(response.data.data || []);
+      const url = `${apiConfig.PRICE_COMPARISON}/search`;
+      const params = { trending: 'true', limit: 8 };
+      
+      // INSTANT: Check if first product was preloaded by inline script
+      const hasFirstProduct = typeof window !== 'undefined' && window.__firstProduct;
+      
+      const products = await getCachedRequest(url, params, async () => {
+        const response = await axios.get(`${url}?trending=true&limit=8`);
+        return response.data.data || [];
+      });
+      
+      // INSTANT: If first product was preloaded, use it and merge with fetched products
+      if (hasFirstProduct && products.length > 0) {
+        // Check if first product is already in the list
+        const firstProductId = window.__firstProduct._id;
+        const filteredProducts = products.filter(p => p._id !== firstProductId);
+        setTrendingProducts([window.__firstProduct, ...filteredProducts]);
+      } else {
+        setTrendingProducts(products);
+      }
+      
+      // AGGRESSIVE: Preload images immediately when products are fetched
+      const allProducts = hasFirstProduct && products.length > 0 
+        ? [window.__firstProduct, ...products.filter(p => p._id !== window.__firstProduct._id)]
+        : products;
+        
+      if (allProducts && allProducts.length > 0) {
+        // First product image already preloaded, preload next 3 immediately
+        const criticalImages = [];
+        const startIndex = hasFirstProduct ? 1 : 0;
+        allProducts.slice(startIndex, startIndex + 3).forEach(product => {
+          if (product.images && product.images.length > 0) {
+            criticalImages.push(product.images[0]);
+          } else if (product.image) {
+            criticalImages.push(product.image);
+          }
+        });
+        
+        // Preload critical images in HTML head for instant display
+        if (criticalImages.length > 0) {
+          preloadImagesInHead(criticalImages);
+        }
+        
+        // Preload all remaining product images in parallel (high priority)
+        const remainingProducts = hasFirstProduct 
+          ? allProducts.slice(1) 
+          : allProducts.slice(3);
+        if (remainingProducts.length > 0) {
+          preloadProductImages(remainingProducts, 'high', 8);
+        }
+      }
     } catch (error) {
       console.error("Error fetching trending products:", error);
+      // If first product exists, keep it
+      if (!(typeof window !== 'undefined' && window.__firstProduct)) {
+        setTrendingProducts([]);
+      }
     } finally {
       setTrendingLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    // Parallel data fetching for faster initial load
-    Promise.all([
-      fetchFeaturedProducts(),
-      fetchTrendingProducts(),
-      Promise.resolve(checkAuthStatus())
-    ]).catch(error => {
-      console.error("Error loading initial data:", error);
-    });
+    // INSTANT: Start fetching immediately - first product may already be loaded by inline script
+    // Fetch trending products (will merge with preloaded first product if available)
+    fetchTrendingProducts();
+    
+    // Fetch featured products in parallel (doesn't block first product)
+    fetchFeaturedProducts();
+    
+    checkAuthStatus();
   }, [fetchFeaturedProducts, fetchTrendingProducts, checkAuthStatus]);
 
 
@@ -412,7 +505,7 @@ const Home = () => {
             <>
               <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4 md:gap-6">
                 {trendingProducts.map((product) => (
-                  <ProductCard key={product._id} product={product} />
+                  <ViewportProductCard key={product._id} product={product} />
                 ))}
               </div>
               <div className="text-center mt-8 sm:mt-10 md:mt-12 px-4">
@@ -647,7 +740,7 @@ const Home = () => {
             <>
               <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4 md:gap-6">
                 {featuredProducts.map((product) => (
-                  <ProductCard key={product._id} product={product} />
+                  <ViewportProductCard key={product._id} product={product} />
                 ))}
               </div>
               <div className="text-center mt-8 sm:mt-10 md:mt-12 px-4">

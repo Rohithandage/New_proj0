@@ -86,7 +86,7 @@ const COUNTRY_TO_CURRENCY = {
 /**
  * Get cached currency info from localStorage
  */
-const getCachedCurrencyInfo = () => {
+export const getCachedCurrencyInfo = () => {
   try {
     const cached = localStorage.getItem(CURRENCY_STORAGE_KEY);
     if (!cached) return null;
